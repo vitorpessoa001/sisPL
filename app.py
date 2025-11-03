@@ -521,23 +521,13 @@ def api_analisar_pl():
             temp_pdf_path = temp_pdf.name
         logger.info(f"📦 PDF salvo temporariamente em {temp_pdf_path}")
 
-        # 4️⃣ Extração de texto se PDF for pequeno, senão faz upload
-        try:
-            file_size = os.path.getsize(temp_pdf_path)
-            if file_size < 2_000_000:  # < 2 MB → extrai texto direto
-                logger.info(f"📖 Extraindo texto localmente (tamanho {file_size/1024:.1f} KB)...")
-                texto_pdf = extract_text(temp_pdf_path)
-                upload_id = None
-            else:
-                logger.info(f"☁️ Enviando PDF à OpenAI (tamanho {file_size/1024:.1f} KB)...")
-                with open(temp_pdf_path, "rb") as f:
-                    upload = client.files.create(file=f, purpose="assistants")
-                    upload_id = upload.id
-            os.remove(temp_pdf_path)
-        except Exception as e:
-            logger.warning(f"Falha ao extrair texto do PDF: {e}")
-            texto_pdf = ""
-            upload_id = None
+        # 4️⃣ Sempre envia o PDF completo para a OpenAI
+        logger.info("☁️ Enviando PDF completo à OpenAI para análise...")
+        with open(temp_pdf_path, "rb") as f:
+            upload = client.files.create(file=f, purpose="assistants")
+        upload_id = upload.id
+        os.remove(temp_pdf_path)
+        logger.info(f"☁️ PDF enviado à OpenAI com file_id={upload_id}")
 
         # 5️⃣ Escolhe modelo automaticamente (Render → leve / Local → completo)
         modelo = "gpt-4o-mini" if os.getenv("RENDER") else "gpt-5"
@@ -550,7 +540,7 @@ def api_analisar_pl():
                 {
                     "type": "input_text",
                     "text": (
-                        f"Analise o Projeto {tipo} {numero}/{ano} considerando o texto anexo "
+                        f"Analise o Projeto {tipo} {numero}/{ano} considerando o texto em anexo "
                         "e os cinco tópicos abaixo:\n\n"
                         "1. **📘 Resumo técnico** — conteúdo e objetivo.\n"
                         "2. **🟢 Pontos positivos** — sob a ótica liberal-conservadora.\n"
@@ -559,8 +549,10 @@ def api_analisar_pl():
                         "5. **↔️ Orientação sugerida** — voto e justificativa."
                     ),
                 },
+                {"type": "input_file", "file_id": upload_id},
             ],
         }
+
 
         if upload_id:
             input_user["content"].append({"type": "input_file", "file_id": upload_id})
@@ -616,6 +608,7 @@ if __name__ == '__main__':
     init_pauta_cache_db()
 
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
 
 
