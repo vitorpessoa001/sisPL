@@ -474,7 +474,7 @@ logger.info(f"🔑 OPENAI_API_KEY detectada? {'Sim' if os.getenv('OPENAI_API_KEY
 
 
 # --------------------------------------------------------------------------
-# 🔹 ROTA COMPLETA: FAZ DOWNLOAD DO PDF E ENVIA O ARQUIVO INTEIRO PARA ANÁLISE POLÍTICA
+# 🔹 ROTA ROBUSTA PARA GERAR ANÁLISE DE PL (com fallback e controle de recursos)
 # --------------------------------------------------------------------------
 @app.route('/api/analisar_pl')
 @login_required
@@ -489,147 +489,125 @@ def api_analisar_pl():
         # 🔍 Aceita formatos como "PL 2768/2025", "PEC 9/2024", "PDL12/2023"
         match = re.match(r'([A-Z]{2,4})\s*\.?\s*(\d+)\s*/\s*(\d{4})', numero_pl.upper())
         if not match:
-            return jsonify({"erro": "Formato inválido. Use algo como 'PL 1234/2024' ou 'PEC 9/2023'."}), 400
+            return jsonify({"erro": "Formato inválido. Use algo como 'PL 1234/2024'."}), 400
 
         tipo, numero, ano = match.groups()
         logger.info(f"🔎 Buscando projeto: tipo={tipo}, número={numero}, ano={ano}")
 
-        # 1️⃣ Consulta principal na API de proposições
+        # 1️⃣ Busca na API
         api_url = f"https://dadosabertos.camara.leg.br/api/v2/proposicoes?siglaTipo={tipo}&numero={numero}&ano={ano}"
         r_api = requests.get(api_url, headers=headers, timeout=15)
         r_api.raise_for_status()
         dados_api = r_api.json()
 
         if not dados_api.get("dados"):
-            logger.warning(f"❌ {tipo} {numero}/{ano} não encontrado na API.")
             return jsonify({"erro": f"{tipo} {numero}/{ano} não encontrado na API."}), 404
 
         id_prop = dados_api["dados"][0]["id"]
         logger.info(f"📘 ID da proposição: {id_prop}")
 
-        # 2️⃣ Busca do inteiro teor direto da API
+        # 2️⃣ Detalhes e link do PDF
         url_detalhes = f"https://dadosabertos.camara.leg.br/api/v2/proposicoes/{id_prop}"
         r_detalhes = requests.get(url_detalhes, headers=headers, timeout=15)
         r_detalhes.raise_for_status()
         dados_prop = r_detalhes.json().get("dados", {})
         link_pdf = dados_prop.get("urlInteiroTeor")
-
-        if not link_pdf:
-            logger.warning("⚠️ Nenhum 'urlInteiroTeor' encontrado. Tentando via ficha de tramitação...")
-            link_pdf = f"https://www.camara.leg.br/proposicoesWeb/fichadetramitacao?idProposicao={id_prop}"
-
         logger.info(f"📄 PDF do inteiro teor: {link_pdf}")
 
-        # 3️⃣ Faz download do PDF e salva temporariamente
+        # 3️⃣ Faz download do PDF
         pdf_bytes = requests.get(link_pdf, headers=headers, timeout=25).content
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
             temp_pdf.write(pdf_bytes)
             temp_pdf_path = temp_pdf.name
+        logger.info(f"📦 PDF salvo temporariamente em {temp_pdf_path}")
 
-        logger.info(f"📦 PDF baixado e salvo temporariamente em {temp_pdf_path}")
+        # 4️⃣ Extração de texto se PDF for pequeno, senão faz upload
+        try:
+            file_size = os.path.getsize(temp_pdf_path)
+            if file_size < 2_000_000:  # < 2 MB → extrai texto direto
+                logger.info(f"📖 Extraindo texto localmente (tamanho {file_size/1024:.1f} KB)...")
+                texto_pdf = extract_text(temp_pdf_path)
+                upload_id = None
+            else:
+                logger.info(f"☁️ Enviando PDF à OpenAI (tamanho {file_size/1024:.1f} KB)...")
+                with open(temp_pdf_path, "rb") as f:
+                    upload = client.files.create(file=f, purpose="assistants")
+                    upload_id = upload.id
+            os.remove(temp_pdf_path)
+        except Exception as e:
+            logger.warning(f"Falha ao extrair texto do PDF: {e}")
+            texto_pdf = ""
+            upload_id = None
 
-        # 4️⃣ Envia o PDF completo para a OpenAI como arquivo
-        with open(temp_pdf_path, "rb") as f:
-            upload = client.files.create(file=f, purpose="assistants")
+        # 5️⃣ Escolhe modelo automaticamente (Render → leve / Local → completo)
+        modelo = "gpt-4o-mini" if os.getenv("RENDER") else "gpt-5"
+        logger.info(f"🧠 Gerando análise com modelo {modelo}")
 
-        os.remove(temp_pdf_path)
-        logger.info(f"☁️ PDF enviado à OpenAI com file_id={upload.id}")
+        # 6️⃣ Monta entrada para o modelo
+        input_user = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        f"Analise o Projeto {tipo} {numero}/{ano} considerando o texto anexo "
+                        "e os cinco tópicos abaixo:\n\n"
+                        "1. **📘 Resumo técnico** — conteúdo e objetivo.\n"
+                        "2. **🟢 Pontos positivos** — sob a ótica liberal-conservadora.\n"
+                        "3. **🔴 Pontos negativos** — sob a ótica do PL em oposição ao governo Lula.\n"
+                        "4. **⚖️ Riscos políticos e de imagem** — impacto na opinião pública.\n"
+                        "5. **↔️ Orientação sugerida** — voto e justificativa."
+                    ),
+                },
+            ],
+        }
 
-        # 5️⃣ Solicita a análise política ao modelo GPT-5 (endpoint responses)
+        if upload_id:
+            input_user["content"].append({"type": "input_file", "file_id": upload_id})
+        elif texto_pdf:
+            input_user["content"][0]["text"] += "\n\n---\nTrecho do inteiro teor:\n" + texto_pdf[:6000]
+
+        # 7️⃣ Requisição otimizada
         resposta = client.responses.create(
-            model="gpt-5",
+            model=modelo,
             input=[
                 {
                     "role": "system",
                     "content": (
-                        "Você é um analista político da bancada do Partido Liberal (PL) na Câmara dos Deputados. "
-                        "Suas análises devem refletir a perspectiva liberal-conservadora, "
-                        "valorizando liberdade econômica, responsabilidade fiscal, defesa da família e segurança pública. "
-                        "Evite repetições e bullets; use parágrafos curtos e subtítulos em negrito."
+                        "Você é um analista político do Partido Liberal (PL) na Câmara dos Deputados. "
+                        "Baseie suas análises em princípios de liberdade econômica, "
+                        "responsabilidade fiscal, defesa da família e segurança pública. "
+                        "Seja direto, organizado e evite repetições."
                     ),
                 },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": (
-                                f"Analise o Projeto {tipo} {numero}/{ano} com base no documento em anexo, "
-                                "seguindo os quatro tópicos abaixo:\n\n"
-                                "1. **📘 Resumo técnico** — explique o conteúdo e objetivo do projeto.\n"
-                                "2. **🟢 Pontos positivos** — sob a ótica do Partido Liberal, "
-                                "3. **🔴 Pontos negativos** — sob a ótica do Partido Liberal, "
-                                "considerando oposição ao governo Lula.\n"
-                                "4. **⚖️ Riscos políticos e de imagem** — repercussões prováveis no debate público e redes sociais.\n"
-                                "5. **↔️ Orientação sugerida** — indique o voto (favorável, contrário ou com ressalvas) e justifique."
-                                "Use esses mesmos ícones listados acima nas respostas dos itens."
-                            ),
-                        },
-                        {
-                            "type": "input_file",
-                            "file_id": upload.id,
-                        },
-                    ],
-                },
+                input_user,
             ],
-            max_output_tokens=10000,  # 🟢 aumente o limite
-            reasoning={"effort": "high"},  # 🧠 força o modelo a analisar profundamente
+            max_output_tokens=4000,  # limite seguro
         )
 
+        # 8️⃣ Extrai texto (compatível com SDK novo e antigo)
+        texto_gerado = getattr(resposta, "output_text", None)
+        if not texto_gerado and hasattr(resposta, "output"):
+            conteudo = resposta.output[0].content
+            if isinstance(conteudo, list) and conteudo and hasattr(conteudo[0], "text"):
+                texto_gerado = conteudo[0].text
+        if not texto_gerado:
+            texto_gerado = json.dumps(resposta, default=str)[:1000]
 
-                # 6️⃣ Extrai texto de forma segura (compatível com qualquer versão da API)
-        try:
-            texto_gerado = None
+        logger.info(f"🧩 Análise gerada com sucesso. Prévia: {texto_gerado[:120]}")
 
-            # Novo formato moderno (OpenAI 2025)
-            if hasattr(resposta, "output_text") and resposta.output_text:
-                texto_gerado = resposta.output_text.strip()
+        # 9️⃣ Formatação leve para exibir no TinyMCE
+        texto_formatado = (
+            re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", texto_gerado.strip())
+            .replace("\n", "<br>")
+        )
 
-            # Estrutura em lista (SDK 1.0+)
-            elif hasattr(resposta, "output") and resposta.output:
-                conteudo = resposta.output[0].content
-                if isinstance(conteudo, list) and len(conteudo) > 0 and hasattr(conteudo[0], "text"):
-                    texto_gerado = conteudo[0].text.strip()
-
-            # Estrutura clássica (chat.completions)
-            elif hasattr(resposta, "choices") and resposta.choices:
-                texto_gerado = resposta.choices[0].message.content.strip()
-
-            # Fallback de segurança
-            if not texto_gerado:
-                texto_gerado = json.dumps(resposta, default=str)[:1000]
-                logger.warning("⚠️ Resposta inesperada — conteúdo bruto armazenado para depuração.")
-
-        except Exception as e:
-            logger.error(f"Falha ao extrair texto da resposta: {e}")
-            texto_gerado = "⚠️ O modelo respondeu em formato inesperado."
-
-        logger.info(f"🧠 Análise gerada com sucesso (via PDF completo). Prévia: {texto_gerado[:120]}")
-        
-        
-        # 🔧 FORMATAÇÃO VISUAL DO TEXTO
-                # 🔧 FORMATAÇÃO VISUAL DO TEXTO (compatível com TinyMCE)
-        texto_formatado = texto_gerado.strip()
-
-        # Substitui os negritos markdown por HTML
-        texto_formatado = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", texto_formatado)
-
-        # Quebra de linha simples após ponto e vírgula
-        texto_formatado = texto_formatado.replace(";", ";<br>")
-
-        # Adiciona <p> nos principais blocos numerados (1., 2., 3., 4.)
-        texto_formatado = re.sub(r"(\d+\.\s+)([A-ZÁÉÍÓÚÂÊÔÇ].+?)(?=\s)", r"<p><b>\1\2</b></p>", texto_formatado)
-
-        # Garante espaçamento entre parágrafos
-        texto_formatado = texto_formatado.replace("\n", "<br>")
-
-        # Define o tipo de retorno HTML para renderizar formatação
         return texto_formatado, 200, {"Content-Type": "text/html; charset=utf-8"}
-
 
     except Exception as e:
         logger.error(f"⚠️ Erro ao gerar análise para {numero_pl}: {e}")
         return jsonify({"erro": f"Erro ao gerar análise: {e}"}), 500
+
 
 
 # --------------------------------------------------------------------------
@@ -638,6 +616,7 @@ if __name__ == '__main__':
     init_pauta_cache_db()
 
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
 
 
