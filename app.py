@@ -470,14 +470,7 @@ import os
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# client = OpenAI(
-#    api_key="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"
-#) 
-# NOVA: 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
-
-#client = OpenAI(api_key=os.getenv("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"))
-
-logger.info("🔐 Cliente OpenAI inicializado com chave fixa para ambiente interno.")
+logger.info(f"🔑 OPENAI_API_KEY detectada? {'Sim' if os.getenv('OPENAI_API_KEY') else 'Não'}")
 
 
 # --------------------------------------------------------------------------
@@ -645,5 +638,6 @@ if __name__ == '__main__':
     init_pauta_cache_db()
 
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
 
