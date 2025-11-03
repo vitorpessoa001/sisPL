@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Pauta - Sessão Deliberativa</title>
+  <style>
+    body { font-family: "Segoe UI", Arial, sans-serif; font-size: 12px; color: #222; margin: 2cm 1.5cm; }
+    h1, h2, h3, h4, h5 { color: #006633; margin-bottom: 4px; }
+    hr { border: none; border-top: 1px solid #aaa; margin: 10px 0; }
+    .cabecalho { text-align: center; margin-bottom: 20px; }
+    .cabecalho img { height: 55px; margin: 0 15px; vertical-align: middle; }
+    .logos { text-align: center; margin-bottom: 5px; }
+    .sumario li { margin-bottom: 3px; }
+    .item { margin-top: 15px; padding-bottom: 10px; border-bottom: 1px solid #ccc; }
+    .ementa { font-style: italic; color: #555; margin-bottom: 5px; }
+    .nota { background: #f6f6f6; padding: 6px 10px; border-left: 3px solid #008040; margin-bottom: 5px; }
+    .destaque { margin-top: 5px; margin-left: 10px; font-size: 11px; }
+    footer { position: fixed; bottom: 0; text-align: center; font-size: 10px; color: #777; left: 0; right: 0; }
+  </style>
+</head>
+<body>
+  <!-- Cabeçalho institucional -->
+  <div class="logos">
+    <img src="{{ url_for('static', filename='logo_camara.png') }}" alt="Câmara dos Deputados">
+    <img src="{{ url_for('static', filename='logo_pl.png') }}" alt="Partido Liberal">
+  </div>
+
+  <div class="cabecalho">
+    <h2>Assessoria de Plenário</h2>
+    <h3>Plenário da Câmara dos Deputados</h3>
+    <hr>
+    <h4>Sessão Deliberativa</h4>
+    <p>
+      <strong>Data/Hora:</strong>
+      {% if evento.dataHoraInicio != 'N/D' %}
+        {{ evento.dataHoraInicio|replace('T', ' ')|datetimeformat('%d/%m/%Y %H:%M') }}
+      {% else %} N/D {% endif %}<br>
+      <strong>Descrição:</strong> {{ evento.descricao }}<br>
+      <strong>Local:</strong> {{ evento.local }}
+    </p>
+  </div>
+
+  <!-- Sumário -->
+  <h4>Sumário</h4>
+  <ul class="sumario">
+    {% for item in itens %}
+      <li><strong>{{ item.ordem }}</strong> — {{ item.projeto }} — {{ item.ementa[:120] }}{% if item.ementa|length > 120 %}...{% endif %}</li>
+    {% endfor %}
+  </ul>
+  <hr>
+
+  <!-- Itens da pauta -->
+  {% for item in itens %}
+    <div class="item">
+      <h4>Item {{ item.ordem }} — {{ item.projeto }}</h4>
+      <div class="ementa">{{ item.ementa }}</div>
+      <p><strong>Autor:</strong> {{ item.autor }}<br>
+         <strong>Relator:</strong> {{ item.relator }}<br>
+         <strong>Situação:</strong> {{ item.situacao }}</p>
+
+      {% if item.resumo_materia %}
+      <div class="nota">
+        <strong>Resumo / Nota Técnica:</strong><br>
+        {{ item.resumo_materia | safe }}
+      </div>
+      {% endif %}
+
+      {% if item.destaques_emendas %}
+        <h5>Destaques</h5>
+        {% for d in item.destaques_emendas %}
+          <div class="destaque">
+            <strong>{{ d.numero }}</strong> — {{ d.descricao }}<br>
+            <em>Autoria:</em> {{ d.autoria }}<br>
+            <em>Situação:</em> {{ d.situacao }}<br>
+            {% if d.resumo_nota %}
+            <div class="nota">
+              <strong>Resumo Técnico ({{ d.numero }}):</strong><br>
+              {{ d.resumo_nota | safe }}
+            </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  <footer>
+    Assessoria de Plenário — Câmara dos Deputados<br>
+    Gerado automaticamente em {{ now().strftime('%d/%m/%Y %H:%M') }}
+  </footer>
+</body>
+</html>
