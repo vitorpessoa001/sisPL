@@ -542,11 +542,11 @@ def api_analisar_pl():
                     "text": (
                         f"Analise o Projeto {tipo} {numero}/{ano} considerando o texto em anexo "
                         "e os cinco tópicos abaixo:\n\n"
-                        "1. **📘 Resumo técnico** — conteúdo e objetivo.\n"
-                        "2. **🟢 Pontos positivos** — sob a ótica liberal-conservadora.\n"
-                        "3. **🔴 Pontos negativos** — sob a ótica do PL em oposição ao governo Lula.\n"
-                        "4. **⚖️ Riscos políticos e de imagem** — impacto na opinião pública.\n"
-                        "5. **↔️ Orientação sugerida** — voto e justificativa."
+                        "1. 📘 Resumo técnico** — conteúdo e objetivo.\n"
+                        "2. 🟢 Pontos positivos** — sob a ótica liberal-conservadora.\n"
+                        "3. 🔴 Pontos negativos** — sob a ótica do PL em oposição ao governo Lula.\n"
+                        "4. ⚖️ Riscos políticos e de imagem** — impacto na opinião pública.\n"
+                        "5. ↔️ Orientação sugerida** — voto e justificativa."
                     ),
                 },
                 {"type": "input_file", "file_id": upload_id},
@@ -608,6 +608,7 @@ if __name__ == '__main__':
     init_pauta_cache_db()
 
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
 
 
