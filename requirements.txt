@@ -16,5 +16,8 @@ itsdangerous==2.2.0
 MarkupSafe==2.1.5
 openai==1.52.2
 pdfminer.six==20231228
+httpx==0.27.0
+
+
 
 
